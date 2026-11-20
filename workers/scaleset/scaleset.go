@@ -826,9 +826,9 @@ func (w *Worker) handleScaleUp() {
 	}
 	// The caller holds mux. Only the HTTP requests run concurrently; all
 	// runner state and database writes remain on this goroutine.
-	for result := range generateJITConfigs(w.ctx, w.targetRunners()-w.runnerCount(), func() (jitResult, error) {
+	for result := range generateJITConfigs(w.ctx, w.targetRunners()-w.runnerCount(), func(jitCtx context.Context) (jitResult, error) {
 		name := strings.ToLower(fmt.Sprintf("%s-%s", w.scaleSet.GetRunnerPrefix(), util.NewID()))
-		config, err := scaleSetCli.GenerateJitRunnerConfig(w.ctx, name, w.scaleSet.ScaleSetID)
+		config, err := scaleSetCli.GenerateJitRunnerConfig(jitCtx, name, w.scaleSet.ScaleSetID)
 		return jitResult{name: name, config: config}, err
 	}) {
 		if result.err != nil {
