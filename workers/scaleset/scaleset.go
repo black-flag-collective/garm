@@ -79,9 +79,11 @@ type Worker struct {
 
 	listener *scaleSetListener
 
-	mux     sync.Mutex
-	running bool
-	quit    chan struct{}
+	mux               sync.Mutex
+	running           bool
+	quit              chan struct{}
+	scaleUp           chan struct{}
+	scaleUpRetryAfter time.Time
 }
 
 func (w *Worker) ensureScaleSetInGitHub() error {
@@ -328,6 +330,7 @@ func (w *Worker) Start() (err error) {
 	w.consumer = consumer
 	w.running = true
 	w.quit = make(chan struct{})
+	w.scaleUp = make(chan struct{}, 1)
 
 	slog.DebugContext(w.ctx, "starting scale set worker loops", "scale_set", w.consumerID)
 	go w.loop()
@@ -617,6 +620,7 @@ func (w *Worker) handleScaleSetEvent(event dbCommon.ChangePayload) {
 			}
 		}
 		w.scaleSet = scaleSet
+		w.requestScaleUp()
 		w.mux.Unlock()
 	default:
 		slog.DebugContext(w.ctx, "invalid operation type; ignoring", "operation_type", event.Operation)
@@ -796,6 +800,9 @@ Loop:
 }
 
 func (w *Worker) handleScaleUp() {
+	if time.Now().Before(w.scaleUpRetryAfter) {
+		return
+	}
 	if !w.scaleSet.Enabled {
 		slog.DebugContext(w.ctx, "scale set is disabled; not scaling up")
 		return
@@ -817,13 +824,19 @@ func (w *Worker) handleScaleUp() {
 		slog.ErrorContext(w.ctx, "error getting scale set client", "error", err)
 		return
 	}
-	for i := w.runnerCount(); i < w.targetRunners(); i++ {
-		newRunnerName := strings.ToLower(fmt.Sprintf("%s-%s", w.scaleSet.GetRunnerPrefix(), util.NewID()))
-		jitConfig, err := scaleSetCli.GenerateJitRunnerConfig(w.ctx, newRunnerName, w.scaleSet.ScaleSetID)
-		if err != nil {
-			slog.ErrorContext(w.ctx, "error generating jit config", "error", err)
+	// The caller holds mux. Only the HTTP requests run concurrently; all
+	// runner state and database writes remain on this goroutine.
+	for result := range generateJITConfigs(w.ctx, w.targetRunners()-w.runnerCount(), func() (jitResult, error) {
+		name := strings.ToLower(fmt.Sprintf("%s-%s", w.scaleSet.GetRunnerPrefix(), util.NewID()))
+		config, err := scaleSetCli.GenerateJitRunnerConfig(w.ctx, name, w.scaleSet.ScaleSetID)
+		return jitResult{name: name, config: config}, err
+	}) {
+		if result.err != nil {
+			w.scaleUpRetryAfter = time.Now().Add(time.Minute)
+			slog.ErrorContext(w.ctx, "error generating jit config", "error", result.err)
 			continue
 		}
+		newRunnerName, jitConfig := result.name, result.config
 		slog.DebugContext(w.ctx, "creating new runner", "runner_name", newRunnerName)
 		decodedJit, err := jitConfig.DecodedJITConfig()
 		if err != nil {
@@ -857,24 +870,22 @@ func (w *Worker) handleScaleUp() {
 }
 
 func (w *Worker) waitForToolsOrCancel() (hasTools, stopped bool) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
 	select {
-	case <-ticker.C:
-		entity, err := w.scaleSet.GetEntity()
-		if err != nil {
-			slog.ErrorContext(w.ctx, "error getting entity", "error", err)
-		}
-		if _, err := cache.GetGithubToolsCache(entity.ID); err != nil {
-			slog.DebugContext(w.ctx, "tools not found in cache; waiting for tools")
-			return false, false
-		}
-		return true, false
 	case <-w.quit:
 		return false, true
 	case <-w.ctx.Done():
 		return false, true
+	default:
 	}
+	w.mux.Lock()
+	entity, err := w.scaleSet.GetEntity()
+	w.mux.Unlock()
+	if err != nil {
+		slog.ErrorContext(w.ctx, "error getting entity", "error", err)
+		return false, false
+	}
+	_, err = cache.GetGithubToolsCache(entity.ID)
+	return err == nil, false
 }
 
 func (w *Worker) handleScaleDown() {
@@ -992,6 +1003,10 @@ func (w *Worker) handleAutoScale() {
 			return
 		case <-w.ctx.Done():
 			return
+		case <-w.scaleUp:
+			w.mux.Lock()
+			w.handleScaleUp()
+			w.mux.Unlock()
 		case <-ticker.C:
 			w.mux.Lock()
 			for _, instance := range w.runners {
