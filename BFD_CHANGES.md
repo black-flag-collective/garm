@@ -21,5 +21,9 @@ and upstream Linux archive and checksum names.
   logs contain no JIT configuration, tokens, bootstrap arguments or raw errors.
   `call_succeeded` means the provider call returned without an error, not that
   the runner is ready or that latency acceptance passed.
+- Preserve pending/installing runners during ordinary scale-down, even when
+  their provider state is already Running. They become eligible once idle;
+  existing bootstrap timeout cleanup remains in force. A canceled burst may
+  therefore retain startup compute until bootstrap or its configured timeout.
 
 Fleet sizing, warm counts, placement and provider behavior are unchanged.
