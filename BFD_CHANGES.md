@@ -22,8 +22,13 @@ and upstream Linux archive and checksum names.
   `call_succeeded` means the provider call returned without an error, not that
   the runner is ready or that latency acceptance passed.
 - Preserve pending/installing runners during ordinary scale-down, even when
-  their provider state is already Running. They become eligible once idle;
-  existing bootstrap timeout cleanup remains in force. A canceled burst may
+  their provider state is already Running. They become eligible once GitHub
+  confirms online and idle;
+  the bootstrap idle callback alone does not prove listener readiness. Status
+  read failures and busy runners are retained. Bound each scale-down HTTP pass
+  to five seconds so it cannot indefinitely block new demand. Bootstrap timeout
+  cleanup also covers locally idle runners that remain offline. A canceled burst
+  may
   therefore retain startup compute until bootstrap or its configured timeout.
 
 Fleet sizing, warm counts, placement and provider behavior are unchanged.

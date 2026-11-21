@@ -398,10 +398,12 @@ func (w *Worker) reapTimedOutRunners(runners map[string]params.RunnerReference) 
 			continue
 		}
 
-		if runner.RunnerStatus != params.RunnerPending && runner.RunnerStatus != params.RunnerInstalling {
-			slog.DebugContext(w.ctx, "runner is not pending or installing; skipping", "runner_name", runner.Name)
+		if runner.RunnerStatus != params.RunnerPending && runner.RunnerStatus != params.RunnerInstalling && runner.RunnerStatus != params.RunnerIdle {
+			slog.DebugContext(w.ctx, "runner is not awaiting readiness; skipping", "runner_name", runner.Name)
 			continue
 		}
+		// The bootstrap idle callback only confirms service startup. Include idle
+		// records that never connected, while retaining online and busy runners.
 		if ghRunner, ok := runners[runner.Name]; !ok || ghRunner.GetStatus() == params.RunnerOffline {
 			if ok := locking.TryLock(runner.Name, w.consumerID); !ok {
 				slog.DebugContext(w.ctx, "runner is locked; skipping", "runner_name", runner.Name)
@@ -903,8 +905,15 @@ func (w *Worker) handleScaleDown() {
 		slog.ErrorContext(w.ctx, "error getting scale set client", "error", err)
 		return
 	}
+	// Scale-down holds the worker mutex. Bound the pass so slow readiness
+	// reads cannot indefinitely delay newly assigned demand.
+	ctx, cancel := context.WithTimeout(w.ctx, 5*time.Second)
+	defer cancel()
 	removed := 0
 	for _, runner := range w.runners {
+		if ctx.Err() != nil {
+			return
+		}
 		slog.InfoContext(w.ctx, "considering runners for removal", "delta", delta, "removed", removed)
 		if removed >= delta {
 			break
@@ -927,8 +936,22 @@ func (w *Worker) handleScaleDown() {
 				slog.DebugContext(w.ctx, "runner is locked; skipping", "runner_name", runner.Name)
 				continue
 			}
+			// Starting the service can emit Idle before the listener connects. Only
+			// GitHub's live idle state makes an existing registration surplus-ready.
+			// Missing registrations can be cleaned up; offline startup is left to
+			// the bootstrap timeout reaper even when the local callback says Idle.
+			ghRunner, err := scaleSetCli.GetRunner(ctx, runner.AgentID)
+			if err != nil && !errors.Is(err, runnerErrors.ErrNotFound) {
+				slog.ErrorContext(w.ctx, "error checking runner readiness", "runner_name", runner.Name, "error", err)
+				locking.Unlock(runner.Name, false)
+				continue
+			}
+			if err == nil && ghRunner.GetStatus() != params.RunnerIdle {
+				locking.Unlock(runner.Name, false)
+				continue
+			}
 			slog.DebugContext(w.ctx, "removing runner", "runner_name", runner.Name)
-			if err := scaleSetCli.RemoveRunner(w.ctx, runner.AgentID); err != nil {
+			if err := scaleSetCli.RemoveRunner(ctx, runner.AgentID); err != nil {
 				if !errors.Is(err, runnerErrors.ErrNotFound) {
 					slog.ErrorContext(w.ctx, "error removing runner", "runner_name", runner.Name, "error", err)
 					locking.Unlock(runner.Name, false)
