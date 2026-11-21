@@ -951,7 +951,8 @@ func (w *Worker) handleScaleDown() {
 			removed++
 		case commonParams.InstancePendingDelete, commonParams.InstancePendingForceDelete,
 			commonParams.InstanceDeleting, commonParams.InstanceDeleted:
-			removed++
+			// These runners were excluded from delta already. They cannot
+			// satisfy demand or count toward this pass's scale-down work.
 			continue
 		default:
 			slog.WarnContext(w.ctx, "runner is not in a valid state; skipping", "runner_name", runner.Name, "runner_status", runner.Status)
@@ -971,7 +972,19 @@ func (w *Worker) targetRunners() int {
 }
 
 func (w *Worker) runnerCount() int {
-	return len(w.runners)
+	count := 0
+	for _, runner := range w.runners {
+		switch runner.Status {
+		case commonParams.InstancePendingDelete, commonParams.InstancePendingForceDelete,
+			commonParams.InstanceDeleting, commonParams.InstanceDeleted:
+			// Keep tracking cleanup, but don't make a queued job wait for
+			// provider deletion before provisioning its replacement.
+			continue
+		default:
+			count++
+		}
+	}
+	return count
 }
 
 func (w *Worker) handleAutoScale() {
