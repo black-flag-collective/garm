@@ -153,6 +153,8 @@ func (i *instanceManager) pseudoPoolID() string {
 }
 
 func (i *instanceManager) handleCreateInstanceInProvider(instance params.Instance) error {
+	preparationStarted := time.Now()
+	slog.InfoContext(i.ctx, "runner provider preparation started", "runner_name", instance.Name)
 	entity, err := i.getEntity()
 	if err != nil {
 		return fmt.Errorf("getting entity: %w", err)
@@ -237,7 +239,12 @@ func (i *instanceManager) handleCreateInstanceInProvider(instance params.Instanc
 		},
 	}
 
+	providerStarted := time.Now()
+	slog.InfoContext(i.ctx, "runner provider create started", "runner_name", instance.Name,
+		"preparation_ms", providerStarted.Sub(preparationStarted).Milliseconds())
 	providerInstance, err := i.provider.CreateInstance(i.ctx, bootstrapArgs, createInstanceParams)
+	slog.InfoContext(i.ctx, "runner provider create finished", "runner_name", instance.Name,
+		"duration_ms", time.Since(providerStarted).Milliseconds(), "call_succeeded", err == nil)
 	if err != nil {
 		instanceIDToDelete = instance.Name
 		return fmt.Errorf("creating instance in provider: %w", err)

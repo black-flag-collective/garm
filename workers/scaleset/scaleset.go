@@ -828,7 +828,11 @@ func (w *Worker) handleScaleUp() {
 	// runner state and database writes remain on this goroutine.
 	for result := range generateJITConfigs(w.ctx, w.targetRunners()-w.runnerCount(), func(jitCtx context.Context) (jitResult, error) {
 		name := strings.ToLower(fmt.Sprintf("%s-%s", w.scaleSet.GetRunnerPrefix(), util.NewID()))
+		started := time.Now()
+		slog.InfoContext(jitCtx, "runner jit request started", "runner_name", name)
 		config, err := scaleSetCli.GenerateJitRunnerConfig(jitCtx, name, w.scaleSet.ScaleSetID)
+		slog.InfoContext(jitCtx, "runner jit request finished", "runner_name", name,
+			"duration_ms", time.Since(started).Milliseconds(), "succeeded", err == nil)
 		return jitResult{name: name, config: config}, err
 	}) {
 		if result.err != nil {
@@ -866,6 +870,7 @@ func (w *Worker) handleScaleUp() {
 			continue
 		}
 		w.runners[dbInstance.ID] = dbInstance
+		slog.InfoContext(w.ctx, "runner pending create persisted", "runner_name", newRunnerName)
 	}
 }
 

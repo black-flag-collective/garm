@@ -15,5 +15,11 @@ and upstream Linux archive and checksum names.
 - Check cached runner tools immediately, removing the additional one-second
   wait on every autoscale pass. Protect action-service request construction
   against concurrent token refresh.
+- Record JIT request start/end, pending-create persistence, provider preparation
+  and provider-call start/end at info level. Join by runner name with EC2 and
+  boot evidence to locate startup delays. Durations use the monotonic clock;
+  logs contain no JIT configuration, tokens, bootstrap arguments or raw errors.
+  `call_succeeded` means the provider call returned without an error, not that
+  the runner is ready or that latency acceptance passed.
 
 Fleet sizing, warm counts, placement and provider behavior are unchanged.
