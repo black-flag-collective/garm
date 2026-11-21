@@ -9,9 +9,32 @@ import (
 	"testing"
 	"time"
 
+	commonParams "github.com/cloudbase/garm-provider-common/params"
 	dbCommon "github.com/cloudbase/garm/database/common"
 	"github.com/cloudbase/garm/params"
 )
+
+func TestRetiringRunnersDoNotSatisfyQueuedDemand(t *testing.T) {
+	w := &Worker{
+		scaleSet: params.ScaleSet{MaxRunners: 100, DesiredRunnerCount: 3},
+		runners: map[string]params.Instance{
+			"starting": {Status: commonParams.InstancePendingCreate},
+			"creating": {Status: commonParams.InstanceCreating},
+			"finished": {Status: commonParams.InstancePendingDelete},
+			"forced":   {Status: commonParams.InstancePendingForceDelete},
+			"deleting": {Status: commonParams.InstanceDeleting},
+			"deleted":  {Status: commonParams.InstanceDeleted},
+		},
+	}
+	if missing := w.targetRunners() - w.runnerCount(); missing != 1 {
+		t.Fatalf("queued job must get replacement before provider cleanup; missing=%d", missing)
+	}
+	// A running worker still satisfies demand, including an active job.
+	w.runners["active"] = params.Instance{Status: commonParams.InstanceRunning, RunnerStatus: params.RunnerActive}
+	if missing := w.targetRunners() - w.runnerCount(); missing != 0 {
+		t.Fatalf("starting and active runners must prevent overprovisioning; missing=%d", missing)
+	}
+}
 
 func TestDemandUpdateWakesAndCoalesces(t *testing.T) {
 	w := &Worker{ctx: context.Background(), scaleSet: params.ScaleSet{Enabled: true, MaxRunners: 100}, scaleUp: make(chan struct{}, 1)}
