@@ -912,7 +912,13 @@ func (w *Worker) handleScaleDown() {
 		switch runner.Status {
 		case commonParams.InstanceRunning:
 			switch runner.RunnerStatus {
-			case params.RunnerTerminated, params.RunnerActive:
+			case params.RunnerTerminated, params.RunnerActive,
+				params.RunnerPending, params.RunnerInstalling:
+				// Provider Running does not mean bootstrap is finished. Demand
+				// and completion events can arrive separately during a burst;
+				// don't discard startup work on a transient capacity surplus.
+				// Idle runners still scale down, and the bootstrap timeout reaper
+				// retains responsibility for stuck pending/installing runners.
 				slog.DebugContext(w.ctx, "runner is not in a valid state; skipping", "runner_name", runner.Name, "runner_status", runner.RunnerStatus)
 				continue
 			}
