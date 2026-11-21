@@ -28,6 +28,8 @@ func (s *ScaleSetClient) newActionsRequest(ctx context.Context, method, uriPath 
 		return nil, fmt.Errorf("failed to update token: %w", err)
 	}
 
+	s.mux.Lock()
+	defer s.mux.Unlock()
 	actionsURI, err := s.actionsServiceInfo.GetURL()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pipeline URL: %w", err)

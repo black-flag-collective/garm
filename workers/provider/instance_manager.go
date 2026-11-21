@@ -442,20 +442,24 @@ func (i *instanceManager) loop() {
 	defer i.Stop()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	// Reconcile the initial pending instance immediately, then retain the retry ticker.
+	initial := make(chan time.Time, 1)
+	initial <- time.Now()
 	for {
 		select {
 		case <-i.quit:
 			return
 		case <-i.ctx.Done():
 			return
+		case <-initial:
 		case <-ticker.C:
-			if err := i.consolidateState(); err != nil {
-				if errors.Is(err, ErrInstanceDeleted) {
-					// instance had been deleted, we can exit the loop.
-					return
-				}
-				slog.ErrorContext(i.ctx, "consolidating state", "error", err)
+		}
+		if err := i.consolidateState(); err != nil {
+			if errors.Is(err, ErrInstanceDeleted) {
+				// instance had been deleted, we can exit the loop.
+				return
 			}
+			slog.ErrorContext(i.ctx, "consolidating state", "error", err)
 		}
 	}
 }

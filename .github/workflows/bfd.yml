@@ -1,0 +1,68 @@
+name: BFD checks and release
+on:
+  pull_request:
+    branches: [bfd]
+  push:
+    branches: [bfd]
+    tags: ['v0.2.1-bfd.*']
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./workers/scaleset ./workers/provider ./util/github/scalesets
+  build:
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: ./scripts/build-webapp.sh
+      - name: Build and package
+        env:
+          VERSION: ${{ github.ref_name }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          cp -r webapp/build/. webapp/assets/
+          mkdir -p dist
+          for binary in garm garm-cli; do
+            go build -ldflags "-extldflags '-static' -s -w -X github.com/cloudbase/garm/util/appdefaults.Version=$VERSION" -tags osusergo,netgo,sqlite_omit_load_extension -o "dist/$binary" "./cmd/$binary"
+            (cd dist && tar czf "$binary-linux-$ARCH.tgz" "$binary" && sha256sum "$binary-linux-$ARCH.tgz" > "$binary-linux-$ARCH.tgz.sha256")
+          done
+          test "$(dist/garm -version)" = "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*.tgz*
+  release:
+    if: startsWith(github.ref, 'refs/tags/v0.2.1-bfd.')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: gh release create "$VERSION" dist/* --repo "$GITHUB_REPOSITORY" --title "$VERSION" --notes 'Event-driven scale-up and bounded concurrent JIT creation. See BFD_CHANGES.md.'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
