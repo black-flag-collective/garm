@@ -31,4 +31,9 @@ and upstream Linux archive and checksum names.
   may
   therefore retain startup compute until bootstrap or its configured timeout.
 
+- Add result, owner, repository, workflow run ID, runner request ID and finish
+  time to the existing job completion event when supplied. Completion does not
+  imply success; GitHub API enrichment is still needed for run attempts and
+  logical-job deduplication. Acquisition URLs and broker payloads are excluded.
+
 Fleet sizing, warm counts, placement and provider behavior are unchanged.
