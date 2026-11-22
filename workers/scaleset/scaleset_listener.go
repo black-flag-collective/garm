@@ -166,7 +166,7 @@ func (l *scaleSetListener) handleSessionMessage(msg params.RunnerScaleSetMessage
 			slog.InfoContext(l.ctx, "job started", "job_id", job.JobID, "job_name", job.JobDisplayName, "runner_name", job.RunnerName)
 			startedJobs = append(startedJobs, job)
 		case params.MessageTypeJobCompleted:
-			slog.InfoContext(l.ctx, "job completed", "job_id", job.JobID, "job_name", job.JobDisplayName, "runner_name", job.RunnerName)
+			logJobCompleted(l.ctx, job)
 			completedJobs = append(completedJobs, job)
 		case params.MessageTypeJobAvailable:
 			slog.InfoContext(l.ctx, "job available", "job_id", job.JobID, "job_name", job.JobDisplayName)
@@ -299,4 +299,28 @@ func (l *scaleSetListener) Wait() <-chan struct{} {
 		return closed
 	}
 	return l.loopExited
+}
+
+// logJobCompleted deliberately selects scalar attribution fields rather than
+// logging the broker payload, which can contain acquisition URLs and tokens.
+// Missing values remain absent; completion alone does not imply success.
+func logJobCompleted(ctx context.Context, job params.ScaleSetJobMessage) {
+	attrs := []slog.Attr{slog.String("job_id", job.JobID), slog.String("job_name", job.JobDisplayName), slog.String("runner_name", job.RunnerName)}
+	for _, field := range []struct{ key, value string }{
+		{"result", job.Result}, {"owner", job.OwnerName}, {"repository", job.RepositoryName},
+	} {
+		if field.value != "" {
+			attrs = append(attrs, slog.String(field.key, field.value))
+		}
+	}
+	if job.WorkflowRunID > 0 {
+		attrs = append(attrs, slog.Int64("run_id", job.WorkflowRunID))
+	}
+	if job.RunnerRequestID > 0 {
+		attrs = append(attrs, slog.Int64("request_id", job.RunnerRequestID))
+	}
+	if !job.FinishTime.IsZero() {
+		attrs = append(attrs, slog.Time("finish_time", job.FinishTime))
+	}
+	slog.LogAttrs(ctx, slog.LevelInfo, "job completed", attrs...)
 }
